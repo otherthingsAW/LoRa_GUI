@@ -148,7 +148,8 @@ def print_frame_hex(frame: bytes, description: str = ""):
 
 
 def send_test_frames(port_name: str, baudrate: int = 9600, interval: int = 2, 
-                      box_id: int = 1, send_errors: bool = False):
+                      box_id: int = 1, send_errors: bool = False,
+                      random_boxes: bool = False, box_range: list = None):
     """
     通过串口发送测试帧
     
@@ -156,12 +157,25 @@ def send_test_frames(port_name: str, baudrate: int = 9600, interval: int = 2,
         port_name: 串口名称
         baudrate: 波特率
         interval: 发送间隔（秒）
-        box_id: 采集箱ID
+        box_id: 采集箱ID（当 random_boxes 为 False 时使用）
         send_errors: 是否发送错误帧（用于测试）
+        random_boxes: 是否随机选择多个采集箱
+        box_range: 随机选择的采集箱范围（如 [1, 2, 3, 4]）
     """
-    seq = 0
+    # 每个采集箱独立的序列号
+    seqs: Dict[int, int] = {}
     frame_count = 0
     error_frame_count = 0
+    
+    # 初始化采集箱序列号
+    if random_boxes:
+        if box_range is None:
+            box_range = [1, 2, 3, 4]  # 默认使用所有4个采集箱
+        for bid in box_range:
+            seqs[bid] = 0
+    else:
+        seqs[box_id] = 0
+        box_range = [box_id]
     
     try:
         with serial.Serial(port_name, baudrate, timeout=1) as ser:
@@ -171,7 +185,10 @@ def send_test_frames(port_name: str, baudrate: int = 9600, interval: int = 2,
             print(f"串口: {port_name}")
             print(f"波特率: {baudrate}")
             print(f"发送间隔: {interval}秒")
-            print(f"采集箱ID: {box_id}")
+            if random_boxes:
+                print(f"随机采集箱模式: 是 (范围: {box_range})")
+            else:
+                print(f"采集箱ID: {box_id}")
             print(f"发送错误帧: {'是' if send_errors else '否'}")
             print("=" * 70)
             print("\n[使用说明]")
@@ -185,22 +202,33 @@ def send_test_frames(port_name: str, baudrate: int = 9600, interval: int = 2,
             print("=" * 70)
             
             while True:
+                # 随机选择采集箱（如果启用了随机模式）
+                if random_boxes:
+                    current_box_id = random.choice(box_range)
+                else:
+                    current_box_id = box_id
+                
+                # 获取当前采集箱的序列号
+                current_seq = seqs[current_box_id]
+                
+                # 生成随机温度
                 temperatures = generate_random_temperatures()
                 frame_type = "正常帧"
                 is_error_frame = False
                 
+                # 决定是否发送错误帧
                 if send_errors and frame_count > 0 and frame_count % 5 == 0:
                     error_type = random.choice(['crc', 'header'])
                     if error_type == 'crc':
-                        frame = create_frame(box_id, seq, temperatures, corrupt_crc=True)
+                        frame = create_frame(current_box_id, current_seq, temperatures, corrupt_crc=True)
                         frame_type = "错误帧 (CRC损坏)"
                     else:
-                        frame = create_frame(box_id, seq, temperatures, corrupt_header=True)
+                        frame = create_frame(current_box_id, current_seq, temperatures, corrupt_header=True)
                         frame_type = "错误帧 (帧头损坏)"
                     is_error_frame = True
                     error_frame_count += 1
                 else:
-                    frame = create_frame(box_id, seq, temperatures)
+                    frame = create_frame(current_box_id, current_seq, temperatures)
                 
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                 
@@ -209,8 +237,8 @@ def send_test_frames(port_name: str, baudrate: int = 9600, interval: int = 2,
                 print(f"{'='*70}")
                 
                 print(f"\n[发送端原始数据]")
-                print(f"  BoxID: {box_id}")
-                print(f"  Seq: {seq}")
+                print(f"  BoxID: {current_box_id}")
+                print(f"  Seq: {current_seq}")
                 print(f"\n  随机温度列表 (30路):")
                 
                 for i in range(0, 30, 5):
@@ -232,12 +260,13 @@ def send_test_frames(port_name: str, baudrate: int = 9600, interval: int = 2,
                     print(f"     (CRC错误或帧头错误会导致解析失败)")
                 else:
                     print(f"  ✓ 请检查接收端输出的 JSON:")
-                    print(f"    - BoxID 应该为: {box_id}")
-                    print(f"    - Seq 应该为: {seq}")
+                    print(f"    - BoxID 应该为: {current_box_id}")
+                    print(f"    - Seq 应该为: {current_seq}")
                     print(f"    - Temperatures 应该与上面的 30 路温度列表一致")
                     print(f"    - 如果不一致，说明解析逻辑有问题！")
                 
-                seq = (seq + 1) & 0xFF
+                # 更新序列号（每个采集箱独立）
+                seqs[current_box_id] = (current_seq + 1) & 0xFF
                 frame_count += 1
                 
                 print(f"\n等待 {interval} 秒后发送下一帧...")
@@ -254,6 +283,9 @@ def send_test_frames(port_name: str, baudrate: int = 9600, interval: int = 2,
         print(f"  总帧数: {frame_count}")
         print(f"  正常帧: {frame_count - error_frame_count}")
         print(f"  错误帧: {error_frame_count}")
+        print(f"\n各采集箱序列号状态:")
+        for bid, seq in seqs.items():
+            print(f"  采集箱 {bid}: Seq = {seq}")
         return True
 
 
@@ -267,10 +299,25 @@ def main():
     parser.add_argument('--interval', '-i', type=int, default=2, help='发送间隔（秒，默认: 2）')
     parser.add_argument('--boxid', type=int, default=1, help='采集箱ID (默认: 1)')
     parser.add_argument('--errors', '-e', action='store_true', help='发送错误帧（用于测试异常处理）')
+    parser.add_argument('--random', '-r', action='store_true', help='随机选择多个采集箱 (默认: 1-4)')
+    parser.add_argument('--box-range', type=str, default='1,2,3,4', help='随机选择的采集箱范围 (如 1,2,3,4)')
     parser.add_argument('--scan', '-s', action='store_true', help='扫描可用串口')
     parser.add_argument('--test', '-t', action='store_true', help='运行本地测试（不使用串口）')
     
     args = parser.parse_args()
+    
+    # 解析采集箱范围
+    box_range = None
+    if args.random:
+        try:
+            box_range = [int(x.strip()) for x in args.box_range.split(',')]
+            # 过滤有效的采集箱ID (1-4)
+            box_range = [x for x in box_range if 1 <= x <= 4]
+            if not box_range:
+                box_range = [1, 2, 3, 4]
+        except ValueError:
+            print(f"警告: 无效的采集箱范围 '{args.box_range}'，使用默认值 [1, 2, 3, 4]")
+            box_range = [1, 2, 3, 4]
     
     if args.scan:
         print("扫描可用串口...")
@@ -310,6 +357,9 @@ def main():
         print("  2. 终端1（发送端）: python lora_test_sender.py -p COM1 -i 2")
         print("  3. 终端2（接收端）: python lora_temperature_parser.py -p COM2")
         print("  4. 比对发送端打印的温度列表和接收端输出的 JSON")
+        print("\n多箱随机测试:")
+        print("  python lora_test_sender.py -p COM1 -i 2 -r          # 随机发送 1-4 号采集箱")
+        print("  python lora_test_sender.py -p COM1 -i 2 -r --box-range 1,3  # 随机发送 1 和 3 号采集箱")
         return
     
     if args.port:
@@ -318,7 +368,9 @@ def main():
             baudrate=args.baudrate,
             interval=args.interval,
             box_id=args.boxid,
-            send_errors=args.errors
+            send_errors=args.errors,
+            random_boxes=args.random,
+            box_range=box_range
         )
     else:
         parser.print_help()
@@ -327,6 +379,8 @@ def main():
         print("  python lora_test_sender.py --test                    # 本地测试")
         print("  python lora_test_sender.py -p COM1 -i 2             # 发送到 COM1，每2秒一帧")
         print("  python lora_test_sender.py -p COM1 -i 2 -e          # 同时发送错误帧测试")
+        print("  python lora_test_sender.py -p COM1 -i 2 -r          # 随机发送多个采集箱 (1-4)")
+        print("  python lora_test_sender.py -p COM1 -i 2 -r --box-range 1,3  # 随机发送 1 和 3 号采集箱")
 
 
 if __name__ == "__main__":
