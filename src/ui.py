@@ -48,12 +48,18 @@ class TemperatureUI:
         # 波特率选项
         self.baudrate_options = [9600, 19200, 38400, 57600, 115200]
         
+        # 数据更新追踪
+        self.last_update_time: Dict[str, str] = {}  # 每个box_id的最后更新时间
+        
         # 构建UI
         self._build_ui()
         
         # 注册回调
         self.state_manager.on_data_change = self._on_data_update
         self.state_manager.on_connection_change = self._on_connection_change
+        
+        # 启动定时器定期刷新UI（用于确保后台数据更新能反映到UI）
+        self._start_update_timer()
     
     def _build_ui(self) -> None:
         """构建整个UI界面"""
@@ -391,17 +397,53 @@ class TemperatureUI:
     def _on_data_update(self, box_id: str, data: Dict[str, Any]) -> None:
         """
         数据更新回调
+        注意：此方法在后台线程中调用，不应该直接更新UI
+        UI更新由定时器负责
         
         Args:
             box_id: 采集箱 ID
             data: 数据字典
         """
-        # 使用NiceGUI的run方法在UI线程中更新
-        ui.run(lambda: self._update_temperature_display(box_id, data))
+        # 记录更新时间，用于定时器检测
+        self.last_update_time[box_id] = data.get('Timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"))
+    
+    def _start_update_timer(self) -> None:
+        """
+        启动定时器定期刷新UI
+        这是确保后台数据更新能反映到UI的安全方式
+        """
+        async def update_ui():
+            """定期更新UI"""
+            # 获取当前显示的采集箱
+            current_box_id = self.state_manager.current_box_id
+            
+            # 获取最新数据
+            latest_data = self.state_manager.get_latest_data(current_box_id)
+            
+            if latest_data:
+                # 更新温度显示
+                self._update_temperature_display(current_box_id, latest_data)
+            
+            # 更新连接状态显示
+            if self.status_label:
+                if self.state_manager.is_connected:
+                    self.status_label.text = self.state_manager.connection_status
+                    self.status_label.classes('status-connected', remove='status-disconnected')
+                else:
+                    self.status_label.text = self.state_manager.connection_status
+                    self.status_label.classes('status-disconnected', remove='status-connected')
+            
+            # 更新连接按钮文本
+            if self.connect_button:
+                self.connect_button.text = '断开' if self.state_manager.is_connected else '连接'
+        
+        # 创建定时器（每100毫秒执行一次）
+        ui.timer(0.1, update_ui)
     
     def _update_temperature_display(self, box_id: str, data: Dict[str, Any]) -> None:
         """
         更新温度显示
+        注意：此方法应该在UI线程中调用
         
         Args:
             box_id: 采集箱 ID
@@ -445,12 +487,14 @@ class TemperatureUI:
     def _on_connection_change(self, connected: bool, status: str) -> None:
         """
         连接状态变更回调
+        注意：此方法可能在后台线程中调用，UI更新由定时器负责
         
         Args:
             connected: 是否已连接
             status: 状态描述
         """
-        ui.run(lambda: self._update_connection_display(connected, status))
+        # 状态已经在 state_manager 中更新，定时器会处理UI更新
+        pass
     
     def _update_connection_display(self, connected: bool, status: str) -> None:
         """
