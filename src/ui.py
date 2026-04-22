@@ -187,10 +187,13 @@ class TemperatureUI:
                 ui.label(remark).classes('text-xs text-gray-500 mb-1')
                 temp_label = ui.label('-- °C').classes('text-lg font-bold')
                 temp_label.style(f'color: {self.primary_color}')
+                # 添加时间显示标签
+                time_label = ui.label('--:--:--').classes('text-xs text-gray-400 mt-1')
                 
                 self.temperature_cards.append({
                     'card': card,
                     'temp_label': temp_label,
+                    'time_label': time_label,
                     'remark': remark
                 })
     
@@ -450,6 +453,18 @@ class TemperatureUI:
             data: 数据字典
         """
         temperatures = data.get('Temperatures', [])
+        timestamp = data.get('Timestamp', '')
+        
+        # 解析时间戳，格式化为 hh-mm-ss
+        time_str = '--:--:--'
+        if timestamp:
+            try:
+                # 时间戳格式: 2026-04-22 19:05:01.123
+                # 提取时间部分并转换为 hh-mm-ss
+                time_part = timestamp.split(' ')[1].split('.')[0]  # 19:05:01
+                time_str = time_part.replace(':', '-')  # 19-05-01
+            except:
+                time_str = '--:--:--'
         
         # 如果是当前显示的采集箱，更新UI
         if box_id == self.state_manager.current_box_id:
@@ -457,6 +472,10 @@ class TemperatureUI:
                 if i < len(self.temperature_cards):
                     temp_label = self.temperature_cards[i]['temp_label']
                     temp_label.text = f'{temp:.1f} °C'
+                    
+                    # 更新时间显示
+                    time_label = self.temperature_cards[i]['time_label']
+                    time_label.text = time_str
                     
                     # 根据温度设置颜色（可选：超出范围时变色）
                     if temp < 0 or temp > 60:
